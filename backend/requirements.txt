@@ -1,0 +1,13 @@
+streamlit
+fastapi
+uvicorn
+gspread
+oauth2client
+beautifulsoup4
+requests
+pandas
+openpyxl
+google-generativeai
+pydantic
+python-multipart
+python-dotenv
