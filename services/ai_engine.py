@@ -16,9 +16,9 @@ def humanize_text(text):
     Advanced Humanizer Pipeline.
     Strips AI patterns, markdown, and formatting garbage.
     """
-    # 1. Жесткая очистка от Markdown и HTML (если проскочили)
-    text = re.sub(r'#+\s*', '', text)   # Заголовки
-    text = re.sub(r'\*\*', '', text)    # Жирный шрифт
+    # 1. Жесткая очистка от технического Markdown (кроме жирного шрифта) и HTML
+    text = re.sub(r'#+\s*', '', text)   # Заголовки (обычно не нужны в ячейке)
+    # text = re.sub(r'\*\*', '', text)    # Жирный шрифт - ТЕПЕРЬ ОСТАВЛЯЕМ
     text = re.sub(r'__', '', text)      # Курсив
     text = re.sub(r'`', '', text)       # Код
     text = re.sub(r'<[^>]*>', '', text) # HTML-теги
@@ -42,8 +42,9 @@ def humanize_text(text):
     for old, new in replacements.items():
         text = text.replace(old, new)
 
-    # 4. Финальная чистка лишних пробелов и пустых строк
-    text = re.sub(r'\n{3,}', '\n\n', text)
+    # 4. Финальная чистка лишних пробелов, но сохранение ДВОЙНЫХ переносов для абзацев
+    text = re.sub(r'[ \t]+', ' ', text) # Схлопываем лишние пробелы в строке
+    text = re.sub(r'\n{3,}', '\n\n', text) # Максимум 2 переноса строки
     
     return text.strip()
 
@@ -118,8 +119,9 @@ def run_multi_agent_text_generation(title, link, keywords, _description, page_co
         CONSTRAINTS:
         - Язык: РУССКИЙ.
         - Размер: СТРОГО 1400–1600 символов.
-        - НИКАКОГО MARKDOWN (заголовки #, ##, жирный шрифт **, списки - всё это ЗАПРЕЩЕНО).
-        - НИКАКОГО HTML.
+        - СТРУКТУРА: Обязательно разбей текст на 3-4 логических абзаца.
+        - ФОРМАТИРОВАНИЕ: Выдели основные ключевые слова (2-3 раза за текст) жирным шрифтом, используя двойные звездочки: **слово**.
+        - ЗАПРЕЩЕНО: Заголовки (#), HTML, списки.
         - Никаких "Sure!", "Here is the text" и прочих AI-вступлений.
         - Избегай AI-клише: "Кроме того", "Важно отметить", "В заключение".
         
@@ -171,8 +173,8 @@ def run_multi_agent_text_generation(title, link, keywords, _description, page_co
             {feedback}
             
             STRICT RULES:
-            - НИКАКОГО MARKDOWN (#, ##, **).
-            - НИКАКОГО HTML.
+            - Сохраняй разбивку на абзацы и жирный шрифт (**).
+            - НИКАКИХ заголовков (#) и HTML.
             - Убери AI-слова: "Кроме того", "Является", "Важно", "Подчеркивает".
             - Сохрани объем 1400-1600 символов.
             - Язык: РУССКИЙ.
@@ -183,10 +185,9 @@ def run_multi_agent_text_generation(title, link, keywords, _description, page_co
             current_text = editor_response.text.strip()
 
         # --- Финальная очистка (Humanizer Pipeline) ---
-        # 1. Regex очистка от остатков Markdown/HTML
+        # 1. Regex очистка от технического мусора (оставляем только нужное)
         current_text = re.sub(r'<[^>]*>', '', current_text) # HTML
         current_text = re.sub(r'#+\s*', '', current_text)   # Headers
-        current_text = re.sub(r'\*\*', '', current_text)    # Bold
         
         # 2. Humanizer post-process
         current_text = humanize_text(current_text)
