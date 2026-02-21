@@ -238,12 +238,15 @@ if st.session_state.current_project_id:
                 except Exception as e: # pylint: disable=broad-exception-caught
                     st.error(f"Ошибка сохранения: {e}")
 
-    # --- Обработка действий ---
-    st.divider()
-    
-    # Регулярно проверяем состояние выбора
-    current_data = edited_data.to_dict('records') if isinstance(edited_data, pd.DataFrame) else edited_data
-    
+
+    # Вспомогательная функция для проверки галочки
+    def is_row_selected(row):
+        val = row.get("Выбрать")
+        if val is None: return False
+        if isinstance(val, bool): return val
+        s_val = str(val).strip().upper()
+        return s_val in ["TRUE", "1", "YES", "ДА", "CHECKED", "V"]
+
     # Вспомогательная функция для проверки галочки (максимально гибкая)
     def check_if_selected(row):
         # Проверяем по ключу
@@ -262,102 +265,6 @@ if st.session_state.current_project_id:
                 if v is True or str(v).strip().upper() in ["TRUE", "1"]:
                     return True
         return False
-
-    selected_count = sum(1 for r in current_data if check_if_selected(r))
-    
-    # Всегда показываем статус, чтобы пользователь видел, что программа "жива"
-    if selected_count > 0:
-        st.success(f"🎯 Выбрано строк для генерации: {selected_count}")
-    else:
-        st.info("ℹ️ Ни одна строка не выбрана (AI будет заполнять только пустые ячейки).")
-    
-    if action == "Запуск парсера":
-        st.info("Парсинг исходной страницы для поиска новых ссылок.")
-        source_url = st.text_input("URL источника")
-        
-        # Инициализация флага остановки
-        if 'parsing_active' not in st.session_state:
-            st.session_state.parsing_active = False
-
-        col_start, col_stop = st.columns(2)
-        with col_start:
-            start_btn = st.button("Начать парсинг", disabled=st.session_state.parsing_active)
-        with col_stop:
-            stop_btn = st.button("Остановить", disabled=not st.session_state.parsing_active)
-
-        if stop_btn:
-            st.session_state.parsing_active = False
-            st.rerun()
-
-        if start_btn and source_url:
-            st.session_state.parsing_active = True
-            with st.spinner("Парсим структуру сайта..."):
-                res = parser.parse_source_page(source_url)
-                
-                if "error" in res:
-                    st.error(res["error"])
-                    st.session_state.parsing_active = False
-                else:
-                    links = res["links"]
-                    existing_links = {
-                        row.get("Link") for row in st.session_state.project_data
-                    }
-                    new_links = [l for l in links if l not in existing_links]
-                    
-                    if not new_links:
-                        st.warning("Новых ссылок не обнаружено.")
-                        st.session_state.parsing_active = False
-                    else:
-                        st.write(f"Найдено новых ссылок: {len(new_links)}. Начинаем сбор данных...")
-                        
-                        processed_rows = []
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
-                        
-                        batch_size = 25
-                        
-                        for idx, link in enumerate(new_links):
-                            if not st.session_state.parsing_active:
-                                st.warning("Парсинг остановлен пользователем.")
-                                break
-                            
-                            status_text.text(f"Обработка {idx + 1} из {len(new_links)}: {link}")
-                            meta = parser.fetch_page_metadata(link)
-                            
-                            if meta:
-                                meta["Выбрать"] = False
-                                meta["Keywords"] = ""
-                                meta["New Description"] = ""
-                                meta["Text"] = ""
-                                processed_rows.append(meta)
-                            
-                            progress_bar.progress((idx + 1) / len(new_links))
-
-                            # Сохранение пачкой каждые batch_size строк
-                            if len(processed_rows) >= batch_size:
-                                sheets.add_rows(st.session_state.current_project_id, processed_rows)
-                                # Обновляем локальные данные, чтобы пользователь видел прогресс
-                                st.session_state.project_data.extend(processed_rows)
-                                processed_rows = [] # Очищаем батч
-                        
-                        # Сохраняем остаток
-                        if processed_rows:
-                            sheets.add_rows(st.session_state.current_project_id, processed_rows)
-                            st.session_state.project_data.extend(processed_rows)
-                        
-                        st.session_state.parsing_active = False
-                        st.success(f"Парсинг успешно завершен! Добавлено страниц: {len(new_links)}")
-                        st.balloons()
-                        st.info("💡 Следующий шаг: Выберите 'Генерация Meta-описаний' для создания SEO-тегов.")
-                        st.rerun()
-
-    # Вспомогательная функция для проверки галочки
-    def is_row_selected(row):
-        val = row.get("Выбрать")
-        if val is None: return False
-        if isinstance(val, bool): return val
-        s_val = str(val).strip().upper()
-        return s_val in ["TRUE", "1", "YES", "ДА", "CHECKED", "V"]
 
     # --- Обработка действий (теперь edited_data доступна) ---
     st.divider()
