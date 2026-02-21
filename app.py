@@ -5,6 +5,7 @@
 import os
 import streamlit as st
 import pandas as pd
+import concurrent.futures
 from dotenv import load_dotenv
 from services import sheets, parser, ai_engine, export
 
@@ -351,31 +352,42 @@ if st.session_state.current_project_id:
                         
                         batch_size = 25
                         
-                        for idx, link in enumerate(new_links):
+                        # Функция для обработки одной ссылки (для многопоточности)
+                        def fetch_meta_safe(link):
                             if not st.session_state.parsing_active:
-                                st.warning("Парсинг остановлен пользователем.")
-                                break
-                            
-                            percent = int((idx + 1) / len(new_links) * 100)
-                            status_text.text(f"Обработка {idx + 1} из {len(new_links)} ({percent}%): {link}")
-                            meta = parser.fetch_page_metadata(link)
-                            
-                            if meta:
-                                meta["Выбрать"] = False
-                                meta["Keywords"] = ""
-                                meta["New Description"] = ""
-                                meta["Text"] = ""
-                                processed_rows.append(meta)
-                            
-                            progress_bar.progress((idx + 1) / len(new_links))
+                                return None
+                            return parser.fetch_page_metadata(link)
 
-                            # Сохранение пачкой каждые batch_size строк
-                            if len(processed_rows) >= batch_size:
-                                sheets.add_rows(st.session_state.current_project_id, processed_rows)
-                                # Обновляем локальные данные, чтобы пользователь видел прогресс
-                                st.session_state.project_data.extend(processed_rows)
-                                processed_rows = [] # Очищаем батч
-                        
+                        # Используем ThreadPoolExecutor для ускорения (5 потоков для парсинга)
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                            future_to_link = {executor.submit(fetch_meta_safe, link): link for link in new_links}
+                            
+                            for i, future in enumerate(concurrent.futures.as_completed(future_to_link)):
+                                if not st.session_state.parsing_active:
+                                    break
+                                
+                                link = future_to_link[future]
+                                try:
+                                    meta = future.result()
+                                    if meta:
+                                        meta["Выбрать"] = False
+                                        meta["Keywords"] = ""
+                                        meta["New Description"] = ""
+                                        meta["Text"] = ""
+                                        processed_rows.append(meta)
+                                except Exception as e:
+                                    st.warning(f"Ошибка при обработке {link}: {e}")
+                                
+                                percent = int((i + 1) / len(new_links) * 100)
+                                status_text.text(f"Обработано {i + 1} из {len(new_links)} ({percent}%): {link}")
+                                progress_bar.progress((i + 1) / len(new_links))
+
+                                # Сохранение в Sheets пачками
+                                if len(processed_rows) >= batch_size:
+                                    sheets.add_rows(st.session_state.current_project_id, processed_rows)
+                                    st.session_state.project_data.extend(processed_rows)
+                                    processed_rows = []
+
                         # Сохраняем остаток
                         if processed_rows:
                             sheets.add_rows(st.session_state.current_project_id, processed_rows)
@@ -425,27 +437,43 @@ if st.session_state.current_project_id:
                 status_text = st.empty()
                 updates_count = 0
                 
-                for step, idx in enumerate(target_indices):
+                # Функция для генерации одной Meta
+                def process_meta_row(idx_row_tuple):
+                    idx, row = idx_row_tuple
                     if not st.session_state.generation_active:
-                        st.warning("Генерация остановлена пользователем.")
-                        break
-                    
-                    row = data_to_process[idx]
-                    percent = int((step + 1) / len(target_indices) * 100)
-                    status_text.text(f"Обработка {step + 1} из {len(target_indices)} ({percent}%): {row.get('Title', 'No Title')}")
+                        return None
                     
                     title = row.get("Title", "")
                     kw = row.get("Keywords", "")
                     old_desc = row.get("Description", "")
-
                     new_text = ai_engine.generate_new_description(title, kw, old_desc)
+                    return idx, new_text
 
-                    sheets.update_row(st.session_state.current_project_id, idx, {"New Description": new_text})
-                    row["New Description"] = new_text
-                    row["Выбрать"] = False
-                    updates_count += 1
+                # Используем 3 потока для Meta (чтобы не превысить лимиты Gemini)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                    indexed_rows = [(idx, data_to_process[idx]) for idx in target_indices]
+                    future_to_idx = {executor.submit(process_meta_row, item): item[0] for item in indexed_rows}
                     
-                    progress_bar.progress((step + 1) / len(target_indices))
+                    for i, future in enumerate(concurrent.futures.as_completed(future_to_idx)):
+                        if not st.session_state.generation_active:
+                            break
+                        
+                        idx = future_to_idx[future]
+                        try:
+                            result = future.result()
+                            if result:
+                                _, new_text = result
+                                sheets.update_row(st.session_state.current_project_id, idx, {"New Description": new_text})
+                                data_to_process[idx]["New Description"] = new_text
+                                data_to_process[idx]["Выбрать"] = False
+                                updates_count += 1
+                        except Exception as e:
+                            st.warning(f"Ошибка в строке {idx + 1}: {e}")
+                        
+                        percent = int((i + 1) / len(target_indices) * 100)
+                        row_title = data_to_process[idx].get('Title', 'No Title')
+                        status_text.text(f"Генерация {i + 1} из {len(target_indices)} ({percent}%): {row_title}")
+                        progress_bar.progress((i + 1) / len(target_indices))
 
                 st.session_state.project_data = data_to_process
                 st.session_state.generation_active = False
@@ -489,14 +517,11 @@ if st.session_state.current_project_id:
                 status_text = st.empty()
                 updates_count = 0
                 
-                for step, idx in enumerate(target_indices):
+                # Функция для генерации одного текста (для многопоточности)
+                def process_text_row(idx_row_tuple):
+                    idx, row = idx_row_tuple
                     if not st.session_state.generation_active:
-                        st.warning("Генерация остановлена пользователем.")
-                        break
-                    
-                    row = data_to_process[idx]
-                    percent = int((step + 1) / len(target_indices) * 100)
-                    status_text.text(f"Обработка {step + 1} из {len(target_indices)} ({percent}%): {row.get('Title', 'No Title')}")
+                        return None
                     
                     page_text = parser.fetch_page_content(row.get("Link")) or "Контент недоступен"
                     res = ai_engine.run_multi_agent_text_generation(
@@ -507,11 +532,33 @@ if st.session_state.current_project_id:
                         page_context=page_text,
                         api_key=GEMINI_API_KEY
                     )
-                    sheets.update_row(st.session_state.current_project_id, idx, {"Text": res})
-                    row["Text"] = res
-                    row["Выбрать"] = False
-                    updates_count += 1
-                    progress_bar.progress((step + 1) / len(target_indices))
+                    return idx, res
+
+                # Используем 2 потока для текстов (более тяжелая задача)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                    indexed_rows = [(idx, data_to_process[idx]) for idx in target_indices]
+                    future_to_idx = {executor.submit(process_text_row, item): item[0] for item in indexed_rows}
+                    
+                    for i, future in enumerate(concurrent.futures.as_completed(future_to_idx)):
+                        if not st.session_state.generation_active:
+                            break
+                        
+                        idx = future_to_idx[future]
+                        try:
+                            result = future.result()
+                            if result:
+                                _, text_content = result
+                                sheets.update_row(st.session_state.current_project_id, idx, {"Text": text_content})
+                                data_to_process[idx]["Text"] = text_content
+                                data_to_process[idx]["Выбрать"] = False
+                                updates_count += 1
+                        except Exception as e:
+                            st.warning(f"Ошибка в строке {idx + 1}: {e}")
+
+                        percent = int((i + 1) / len(target_indices) * 100)
+                        row_title = data_to_process[idx].get('Title', 'No Title')
+                        status_text.text(f"Текст {i + 1} из {len(target_indices)} ({percent}%): {row_title}")
+                        progress_bar.progress((i + 1) / len(target_indices))
                 
                 st.session_state.project_data = data_to_process
                 st.session_state.generation_active = False
