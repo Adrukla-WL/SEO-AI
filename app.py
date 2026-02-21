@@ -78,6 +78,8 @@ if 'current_project_id' not in st.session_state:
     st.session_state.current_project_id = None
 if 'project_data' not in st.session_state:
     st.session_state.project_data = []
+if 'generation_active' not in st.session_state:
+    st.session_state.generation_active = False
 
 # Безопасность: Ключ API берется только из .env
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -329,7 +331,8 @@ if st.session_state.current_project_id:
                                 st.warning("Парсинг остановлен пользователем.")
                                 break
                             
-                            status_text.text(f"Обработка {idx + 1} из {len(new_links)}: {link}")
+                            percent = int((idx + 1) / len(new_links) * 100)
+                            status_text.text(f"Обработка {idx + 1} из {len(new_links)} ({percent}%): {link}")
                             meta = parser.fetch_page_metadata(link)
                             
                             if meta:
@@ -360,7 +363,18 @@ if st.session_state.current_project_id:
                         st.rerun()
 
     elif action == "Генерация Meta-описаний":
-        if st.button("Запустить генерацию описаний"):
+        col_gen_start, col_gen_stop = st.columns(2)
+        with col_gen_start:
+            start_gen_btn = st.button("Запустить генерацию", disabled=st.session_state.generation_active)
+        with col_gen_stop:
+            stop_gen_btn = st.button("Остановить", disabled=not st.session_state.generation_active)
+
+        if stop_gen_btn:
+            st.session_state.generation_active = False
+            st.rerun()
+
+        if start_gen_btn:
+            st.session_state.generation_active = True
             ai_engine.configure_gemini(GEMINI_API_KEY)
             
             data_to_process = edited_data.to_dict('records') if isinstance(edited_data, pd.DataFrame) else edited_data
@@ -368,42 +382,64 @@ if st.session_state.current_project_id:
             # Находим индексы строк для обработки
             target_indices = [i for i, r in enumerate(data_to_process) if check_if_selected(r)]
             
-            if target_indices:
-                st.info(f"Режим: Генерация для {len(target_indices)} выбранных строк.")
-            else:
+            if not target_indices:
                 # Если ничего не выбрано - берем пустые
                 target_indices = [
                     i for i, r in enumerate(data_to_process) 
                     if not str(r.get("New Description", "")).strip()
                 ]
                 st.info(f"Режим: Заполнение пустых ячеек ({len(target_indices)} строк).")
+            else:
+                st.info(f"Режим: Генерация для {len(target_indices)} выбранных строк.")
 
             if not target_indices:
                 st.warning("Нет строк для обработки. Выберите строки галочками или очистите ячейки 'New Description'.")
+                st.session_state.generation_active = False
             else:
                 progress_bar = st.progress(0)
+                status_text = st.empty()
                 updates_count = 0
-                for idx, row in enumerate(data_to_process):
-                    if idx in target_indices:
-                        title = row.get("Title", "")
-                        kw = row.get("Keywords", "")
-                        old_desc = row.get("Description", "")
-
-                        new_text = ai_engine.generate_new_description(title, kw, old_desc)
-
-                        sheets.update_row(st.session_state.current_project_id, idx, {"New Description": new_text})
-                        row["New Description"] = new_text
-                        row["Выбрать"] = False
-                        updates_count += 1
+                
+                for step, idx in enumerate(target_indices):
+                    if not st.session_state.generation_active:
+                        st.warning("Генерация остановлена пользователем.")
+                        break
                     
-                    progress_bar.progress((idx + 1) / len(data_to_process))
+                    row = data_to_process[idx]
+                    percent = int((step + 1) / len(target_indices) * 100)
+                    status_text.text(f"Обработка {step + 1} из {len(target_indices)} ({percent}%): {row.get('Title', 'No Title')}")
+                    
+                    title = row.get("Title", "")
+                    kw = row.get("Keywords", "")
+                    old_desc = row.get("Description", "")
+
+                    new_text = ai_engine.generate_new_description(title, kw, old_desc)
+
+                    sheets.update_row(st.session_state.current_project_id, idx, {"New Description": new_text})
+                    row["New Description"] = new_text
+                    row["Выбрать"] = False
+                    updates_count += 1
+                    
+                    progress_bar.progress((step + 1) / len(target_indices))
 
                 st.session_state.project_data = data_to_process
+                st.session_state.generation_active = False
                 st.success(f"Готово! Сгенерировано описаний: {updates_count}")
                 st.rerun()
 
     elif action == "Генерация текстов":
-        if st.button("Запустить генерацию текстов"):
+        col_txt_start, col_txt_stop = st.columns(2)
+        with col_txt_start:
+            start_txt_btn = st.button("Запустить генерацию текстов", disabled=st.session_state.generation_active)
+        with col_txt_stop:
+            stop_txt_btn = st.button("Остановить", disabled=not st.session_state.generation_active)
+
+        if stop_txt_btn:
+            st.session_state.generation_active = False
+            st.rerun()
+
+        if start_txt_btn:
+            st.session_state.generation_active = True
             ai_engine.configure_gemini(GEMINI_API_KEY)
             
             data_to_process = edited_data.to_dict('records') if isinstance(edited_data, pd.DataFrame) else edited_data
@@ -422,27 +458,38 @@ if st.session_state.current_project_id:
 
             if not target_indices:
                 st.warning("Нет строк для обработки. Выберите строки галочками или очистите ячейки 'Text'.")
+                st.session_state.generation_active = False
             else:
                 progress_bar = st.progress(0)
+                status_text = st.empty()
                 updates_count = 0
-                for idx, row in enumerate(data_to_process):
-                    if idx in target_indices:
-                        page_text = parser.fetch_page_content(row.get("Link")) or "Контент недоступен"
-                        res = ai_engine.run_multi_agent_text_generation(
-                            title=row.get("Title"),
-                            link=row.get("Link"),
-                            keywords=row.get("Keywords"),
-                            _description=row.get("Description"),
-                            page_context=page_text,
-                            api_key=GEMINI_API_KEY
-                        )
-                        sheets.update_row(st.session_state.current_project_id, idx, {"Text": res})
-                        row["Text"] = res
-                        row["Выбрать"] = False
-                        updates_count += 1
-                    progress_bar.progress((idx + 1) / len(data_to_process))
+                
+                for step, idx in enumerate(target_indices):
+                    if not st.session_state.generation_active:
+                        st.warning("Генерация остановлена пользователем.")
+                        break
+                    
+                    row = data_to_process[idx]
+                    percent = int((step + 1) / len(target_indices) * 100)
+                    status_text.text(f"Обработка {step + 1} из {len(target_indices)} ({percent}%): {row.get('Title', 'No Title')}")
+                    
+                    page_text = parser.fetch_page_content(row.get("Link")) or "Контент недоступен"
+                    res = ai_engine.run_multi_agent_text_generation(
+                        title=row.get("Title"),
+                        link=row.get("Link"),
+                        keywords=row.get("Keywords"),
+                        _description=row.get("Description"),
+                        page_context=page_text,
+                        api_key=GEMINI_API_KEY
+                    )
+                    sheets.update_row(st.session_state.current_project_id, idx, {"Text": res})
+                    row["Text"] = res
+                    row["Выбрать"] = False
+                    updates_count += 1
+                    progress_bar.progress((step + 1) / len(target_indices))
                 
                 st.session_state.project_data = data_to_process
+                st.session_state.generation_active = False
                 st.success(f"Готово! Сгенерировано текстов: {updates_count}")
                 st.rerun()
 
