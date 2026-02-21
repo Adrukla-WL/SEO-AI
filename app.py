@@ -240,6 +240,31 @@ if st.session_state.current_project_id:
                 except Exception as e: # pylint: disable=broad-exception-caught
                     st.error(f"Ошибка сохранения: {e}")
 
+    # --- Инспекция контента (Expanders) ---
+    st.divider()
+    st.subheader("🔍 Просмотр контента")
+    
+    # Показываем только если есть данные
+    if not df_for_editor.empty:
+        for idx, row in df_for_editor.iterrows():
+            has_desc = str(row.get("New Description", "")).strip()
+            has_text = str(row.get("Text", "")).strip()
+            
+            if has_desc or has_text:
+                title = row.get("Title", f"Строка {idx + 1}")
+                with st.expander(f"📄 {title}"):
+                    if has_desc:
+                        st.markdown("### 📝 Meta Description")
+                        st.markdown(row["New Description"])
+                    if has_text:
+                        if has_desc: st.divider()
+                        st.markdown("### ✍️ Сгенерированный текст")
+                        st.markdown(row["Text"])
+            elif idx == 0 and not has_desc and not has_text:
+                st.info("Здесь появятся развернутые тексты после их генерации.")
+    else:
+        st.info("Нет данных для отображения.")
+
 
     # Вспомогательная функция для проверки галочки
     def is_row_selected(row):
