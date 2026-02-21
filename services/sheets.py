@@ -8,9 +8,22 @@ from datetime import datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
+import re
+
 # Build logic for authentication
 # Assuming credentials.json is in the root backend folder
 SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+
+def extract_id_from_url(input_str: str) -> str:
+    """Extracts the spreadsheet ID from a full Google Sheets URL or returns the ID if already one."""
+    # Pattern for Google Sheets ID
+    pattern = r'/spreadsheets/d/([a-zA-Z0-9-_]+)'
+    match = re.search(pattern, input_str)
+    if match:
+        return match.group(1)
+    # If no match but contains slash, might be some other URL format, 
+    # but let's just return stripped input
+    return input_str.strip()
 
 import json
 
@@ -60,7 +73,7 @@ def create_project_sheet(project_name: str):
 def get_project_data(sheet_id: str):
     """Fetches all data from the project sheet."""
     client = get_client()
-    sh = client.open_by_key(sheet_id)
+    sh = client.open_by_key(extract_id_from_url(sheet_id))
     worksheet = sh.get_worksheet(0)
     data = worksheet.get_all_records()
     return data
@@ -71,7 +84,7 @@ def add_rows(sheet_id: str, rows: list):
     rows: list of dicts matching headers
     """
     client = get_client()
-    sh = client.open_by_key(sheet_id)
+    sh = client.open_by_key(extract_id_from_url(sheet_id))
     worksheet = sh.get_worksheet(0)
 
     # Convert dicts to list of lists based on headers
@@ -88,7 +101,7 @@ def update_row(sheet_id: str, row_index: int, updates: dict):
     """Updates specific cells in a row."""
     # row_index is 0-based index from data (so actual row is index + 2 because of header)
     client = get_client()
-    sh = client.open_by_key(sheet_id)
+    sh = client.open_by_key(extract_id_from_url(sheet_id))
     worksheet = sh.get_worksheet(0)
 
     headers = worksheet.row_values(1)
@@ -115,7 +128,7 @@ def replace_project_data(sheet_id: str, new_data: list):
     Safest for 'Save All' in a small project.
     """
     client = get_client()
-    sh = client.open_by_key(sheet_id)
+    sh = client.open_by_key(extract_id_from_url(sheet_id))
     worksheet = sh.get_worksheet(0)
 
     # clear
