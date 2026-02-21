@@ -12,14 +12,30 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Assuming credentials.json is in the root backend folder
 SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 
+import json
+
 def get_client():
     """Authenticates and returns a gspread client."""
+    # Priority 1: Environment variable (good for Railway)
+    creds_json = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
+    if creds_json:
+        try:
+            creds_dict = json.loads(creds_json)
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
+            return gspread.authorize(creds)
+        except Exception as e:
+            print(f"Error loading credentials from GOOGLE_SHEETS_CREDENTIALS: {e}")
+
+    # Priority 2: Local file (good for localhost)
     creds_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'credentials.json')
-    if not os.path.exists(creds_file):
-        raise FileNotFoundError("credentials.json not found in backend root")
-    creds = ServiceAccountCredentials.from_json_keyfile_name(creds_file, SCOPE)
-    client = gspread.authorize(creds)
-    return client
+    if os.path.exists(creds_file):
+        creds = ServiceAccountCredentials.from_json_keyfile_name(creds_file, SCOPE)
+        return gspread.authorize(creds)
+    
+    raise FileNotFoundError(
+        "Credentials not found! Please set GOOGLE_SHEETS_CREDENTIALS environment variable "
+        "or ensure credentials.json exists in the root directory."
+    )
 
 def create_project_sheet(project_name: str):
     """Creates a new Google Sheet for the project."""
