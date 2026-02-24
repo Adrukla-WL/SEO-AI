@@ -354,8 +354,7 @@ if st.session_state.current_project_id:
                         
                         # Функция для обработки одной ссылки (для многопоточности)
                         def fetch_meta_safe(link):
-                            if not st.session_state.parsing_active:
-                                return None
+                            # НЕЛЬЗЯ обращаться к st.session_state из дочернего потока
                             return parser.fetch_page_metadata(link)
 
                         # Используем ThreadPoolExecutor для ускорения (5 потоков для парсинга)
@@ -363,7 +362,8 @@ if st.session_state.current_project_id:
                             future_to_link = {executor.submit(fetch_meta_safe, link): link for link in new_links}
                             
                             for i, future in enumerate(concurrent.futures.as_completed(future_to_link)):
-                                if not st.session_state.parsing_active:
+                                if not st.session_state.get('parsing_active', False):
+                                    executor.shutdown(wait=False, cancel_futures=True)
                                     break
                                 
                                 link = future_to_link[future]
@@ -385,6 +385,7 @@ if st.session_state.current_project_id:
                                 # Сохранение в Sheets пачками
                                 if len(processed_rows) >= batch_size:
                                     sheets.add_rows(st.session_state.current_project_id, processed_rows)
+                                    # Обновляем локальные данные
                                     st.session_state.project_data.extend(processed_rows)
                                     processed_rows = []
 
@@ -394,10 +395,11 @@ if st.session_state.current_project_id:
                             st.session_state.project_data.extend(processed_rows)
                         
                         st.session_state.parsing_active = False
-                        st.success(f"Парсинг успешно завершен! Добавлено страниц: {len(new_links)}")
+                        st.success(f"Парсинг завершен! Добавлено страниц: {len(new_links)}")
                         st.balloons()
-                        st.info("💡 Следующий шаг: Выберите 'Генерация Meta-описаний' для создания SEO-тегов.")
-                        st.rerun()
+                        # Вместо st.rerun() сразу, даем пользователю увидеть результат
+                        if st.button("Обновить таблицу и продолжить"):
+                            st.rerun()
 
     elif action == "Генерация Meta-описаний":
         col_gen_start, col_gen_stop = st.columns(2)
@@ -440,9 +442,7 @@ if st.session_state.current_project_id:
                 # Функция для генерации одной Meta
                 def process_meta_row(idx_row_tuple):
                     idx, row = idx_row_tuple
-                    if not st.session_state.generation_active:
-                        return None
-                    
+                    # НЕЛЬЗЯ обращаться к st.session_state из дочернего потока
                     title = row.get("Title", "")
                     kw = row.get("Keywords", "")
                     old_desc = row.get("Description", "")
@@ -455,7 +455,8 @@ if st.session_state.current_project_id:
                     future_to_idx = {executor.submit(process_meta_row, item): item[0] for item in indexed_rows}
                     
                     for i, future in enumerate(concurrent.futures.as_completed(future_to_idx)):
-                        if not st.session_state.generation_active:
+                        if not st.session_state.get('generation_active', False):
+                            executor.shutdown(wait=False, cancel_futures=True)
                             break
                         
                         idx = future_to_idx[future]
@@ -478,7 +479,8 @@ if st.session_state.current_project_id:
                 st.session_state.project_data = data_to_process
                 st.session_state.generation_active = False
                 st.success(f"Готово! Сгенерировано описаний: {updates_count}")
-                st.rerun()
+                if st.button("Обновить данные"):
+                    st.rerun()
 
     elif action == "Генерация текстов":
         col_txt_start, col_txt_stop = st.columns(2)
@@ -520,9 +522,7 @@ if st.session_state.current_project_id:
                 # Функция для генерации одного текста (для многопоточности)
                 def process_text_row(idx_row_tuple):
                     idx, row = idx_row_tuple
-                    if not st.session_state.generation_active:
-                        return None
-                    
+                    # НЕЛЬЗЯ обращаться к st.session_state из дочернего потока
                     page_text = parser.fetch_page_content(row.get("Link")) or "Контент недоступен"
                     res = ai_engine.run_multi_agent_text_generation(
                         title=row.get("Title"),
@@ -540,7 +540,8 @@ if st.session_state.current_project_id:
                     future_to_idx = {executor.submit(process_text_row, item): item[0] for item in indexed_rows}
                     
                     for i, future in enumerate(concurrent.futures.as_completed(future_to_idx)):
-                        if not st.session_state.generation_active:
+                        if not st.session_state.get('generation_active', False):
+                            executor.shutdown(wait=False, cancel_futures=True)
                             break
                         
                         idx = future_to_idx[future]
@@ -563,7 +564,8 @@ if st.session_state.current_project_id:
                 st.session_state.project_data = data_to_process
                 st.session_state.generation_active = False
                 st.success(f"Готово! Сгенерировано текстов: {updates_count}")
-                st.rerun()
+                if st.button("Применить"):
+                    st.rerun()
 
     elif action == "Экспорт":
         # Экспорт всегда из мастер-данных или текущего буфера? 
